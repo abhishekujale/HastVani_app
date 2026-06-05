@@ -8,6 +8,7 @@ import { ROUTES, ROLES } from '@/lib/config';
 import ProtectedRoute from '@/components/auth/ProtectedRoute';
 import CustomHeader from '@/components/CustomHeader';
 import type { Class, Assignment, User } from '@/types';
+import { SCHOOL_THEME } from '@/lib/schoolTheme';
 
 type Tab = 'assignments' | 'members';
 
@@ -24,6 +25,15 @@ export default function ClassDetailsPage() {
   const [addStudentEmail, setAddStudentEmail] = useState('');
   const [addingStudent, setAddingStudent] = useState(false);
   const [addStudentError, setAddStudentError] = useState<string | null>(null);
+  const [bulkEmailsText, setBulkEmailsText] = useState('');
+  const [bulkFile, setBulkFile] = useState<File | null>(null);
+  const [bulkUploading, setBulkUploading] = useState(false);
+  const [bulkResult, setBulkResult] = useState<{
+    added: number;
+    skipped: number;
+    failed: number;
+    outcomes?: Array<{ email: string; status: string; reason?: string }>;
+  } | null>(null);
 
   const classId = params.id as string;
   const isTeacher = user?.role === ROLES.TEACHER || user?.role === ROLES.ADMIN;
@@ -38,6 +48,11 @@ export default function ClassDetailsPage() {
     if (!isTeacher) return;
     const studentsRes = await classApi.getStudents(classId);
     setStudents(studentsRes.data.data || []);
+  };
+
+  const refreshClassMeta = async () => {
+    const classRes = await classApi.getById(classId);
+    setClassData(classRes.data.data);
   };
 
   const fetchClassData = async () => {
@@ -70,15 +85,63 @@ export default function ClassDetailsPage() {
 
     setAddingStudent(true);
     setAddStudentError(null);
+    setBulkResult(null);
     try {
       await classApi.addStudent(classId, { email });
       setAddStudentEmail('');
       await fetchStudents();
+      await refreshClassMeta();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
       setAddStudentError(msg || 'Failed to add student. Please try again.');
     } finally {
       setAddingStudent(false);
+    }
+  };
+
+  const downloadBulkTemplate = () => {
+    const csv = 'email\nstudent1@example.com\nstudent2@example.com\n';
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'student-enrollment-template.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleBulkEnroll = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isTeacher) return;
+    if (!bulkFile && !bulkEmailsText.trim()) return;
+
+    setBulkUploading(true);
+    setAddStudentError(null);
+    setBulkResult(null);
+    try {
+      const res = bulkFile
+        ? await classApi.addStudentsBulkFile(classId, bulkFile)
+        : await classApi.addStudentsBulk(classId, { emailsText: bulkEmailsText });
+
+      const summary = res.data.data?.summary;
+      const outcomes = res.data.data?.outcomes;
+      if (summary) {
+        setBulkResult({
+          added: summary.added,
+          skipped: summary.skipped,
+          failed: summary.failed,
+          outcomes,
+        });
+      }
+      setBulkEmailsText('');
+      setBulkFile(null);
+      await fetchStudents();
+      await refreshClassMeta();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      setAddStudentError(msg || 'Bulk enrollment failed. Check your file or email list.');
+    } finally {
+      setBulkUploading(false);
     }
   };
 
@@ -106,7 +169,7 @@ export default function ClassDetailsPage() {
 
   return (
     <ProtectedRoute>
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 pb-20">
+      <div className={`min-h-screen ${SCHOOL_THEME.canvas} pb-20`}>
         <CustomHeader title={classData.className ?? classData.name ?? 'Class'} showBack />
 
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
@@ -214,30 +277,93 @@ export default function ClassDetailsPage() {
           {activeTab === 'members' && (
             <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm overflow-hidden">
               {isTeacher && (
-                <div className="p-4 border-b border-gray-200 dark:border-gray-700">
-                  <form onSubmit={handleAddStudent} className="flex flex-col sm:flex-row gap-3">
-                    <input
-                      type="email"
-                      value={addStudentEmail}
-                      onChange={(e) => setAddStudentEmail(e.target.value)}
-                      placeholder="Student email (e.g. student@example.com)"
-                      className="flex-1 px-4 py-2 rounded-xl border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white"
-                    />
-                    <button
-                      type="submit"
-                      disabled={addingStudent || !addStudentEmail.trim()}
-                      className="px-4 py-2 rounded-xl bg-primary-600 hover:bg-primary-700 text-white font-semibold disabled:opacity-60 disabled:cursor-not-allowed transition"
-                    >
-                      {addingStudent ? 'Adding...' : 'Add Student'}
-                    </button>
-                  </form>
+                <div className="p-4 border-b border-gray-200 dark:border-gray-700 space-y-4">
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-2">
+                      Add student by email
+                    </h3>
+                    <form onSubmit={handleAddStudent} className="flex flex-col sm:flex-row gap-3">
+                      <input
+                        type="email"
+                        value={addStudentEmail}
+                        onChange={(e) => setAddStudentEmail(e.target.value)}
+                        placeholder="student@example.com"
+                        className="flex-1 px-4 py-2 rounded-xl border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white"
+                      />
+                      <button
+                        type="submit"
+                        disabled={addingStudent || !addStudentEmail.trim()}
+                        className="px-4 py-2 rounded-xl bg-primary-600 hover:bg-primary-700 text-white font-semibold disabled:opacity-60 disabled:cursor-not-allowed transition"
+                      >
+                        {addingStudent ? 'Adding...' : 'Add Student'}
+                      </button>
+                    </form>
+                  </div>
+
+                  <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
+                    <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-2">
+                      Bulk enroll (Excel or CSV)
+                    </h3>
+                    <form onSubmit={handleBulkEnroll} className="space-y-3">
+                      <div className="flex flex-col sm:flex-row gap-3">
+                        <input
+                          type="file"
+                          accept=".xlsx,.xls,.csv"
+                          onChange={(e) => setBulkFile(e.target.files?.[0] ?? null)}
+                          className="flex-1 text-sm text-gray-600 dark:text-gray-300 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-primary-50 file:text-primary-700 dark:file:bg-primary-900/30 dark:file:text-primary-300"
+                        />
+                        <button
+                          type="button"
+                          onClick={downloadBulkTemplate}
+                          className="px-4 py-2 rounded-xl border border-gray-300 dark:border-gray-600 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition"
+                        >
+                          Download template
+                        </button>
+                      </div>
+                      <textarea
+                        value={bulkEmailsText}
+                        onChange={(e) => setBulkEmailsText(e.target.value)}
+                        placeholder="Or paste emails (comma or newline separated)"
+                        rows={3}
+                        className="w-full px-4 py-2 rounded-xl border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+                      />
+                      <button
+                        type="submit"
+                        disabled={bulkUploading || (!bulkFile && !bulkEmailsText.trim())}
+                        className="w-full sm:w-auto px-4 py-2 rounded-xl bg-violet-600 hover:bg-violet-700 text-white font-semibold disabled:opacity-60 disabled:cursor-not-allowed transition"
+                      >
+                        {bulkUploading ? 'Processing...' : 'Bulk Add Students'}
+                      </button>
+                    </form>
+                  </div>
+
+                  {bulkResult && (
+                    <div className="bg-green-50 dark:bg-green-900/20 text-green-800 dark:text-green-300 px-4 py-3 rounded-xl text-sm">
+                      <p className="font-medium">
+                        Added {bulkResult.added}, skipped {bulkResult.skipped}, failed {bulkResult.failed}
+                      </p>
+                      {bulkResult.outcomes && bulkResult.failed > 0 && (
+                        <ul className="mt-2 space-y-1 text-xs">
+                          {bulkResult.outcomes
+                            .filter((o) => o.status === 'failed')
+                            .slice(0, 5)
+                            .map((o) => (
+                              <li key={o.email}>
+                                {o.email}: {o.reason}
+                              </li>
+                            ))}
+                        </ul>
+                      )}
+                    </div>
+                  )}
+
                   {addStudentError && (
-                    <div className="mt-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 px-4 py-3 rounded-xl text-sm">
+                    <div className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 px-4 py-3 rounded-xl text-sm">
                       {addStudentError}
                     </div>
                   )}
-                  <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
-                    Tip: Students can also join themselves using the class code.
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    Upload a spreadsheet with an <span className="font-mono">email</span> column, or paste multiple addresses. Students must already be registered.
                   </p>
                 </div>
               )}
@@ -255,8 +381,8 @@ export default function ClassDetailsPage() {
                         <p className="text-sm text-gray-500 dark:text-gray-400">{student.email}</p>
                       </div>
                     </div>
-                    {student.level && (
-                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400">
+                    {student.level != null && (
+                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${SCHOOL_THEME.growth.bg} ${SCHOOL_THEME.growth.text}`}>
                         Lvl {student.level}
                       </span>
                     )}

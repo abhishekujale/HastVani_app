@@ -3,7 +3,14 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import ProtectedRoute from '@/components/auth/ProtectedRoute';
 import { gestureApi } from '@/lib/api';
-import { ML_CONFIG } from '@/lib/config';
+import { GAMIFICATION_CONFIG, ML_CONFIG } from '@/lib/config';
+import { gamificationApi } from '@/lib/api';
+import { resolveGamificationStats } from '@/lib/gamificationDisplay';
+import { SCHOOL_THEME } from '@/lib/schoolTheme';
+import { HeartsDisplay } from '@/components/gamification';
+import { MlStatusBanner } from '@/components/MlStatusBanner';
+import { TrainedGesturesPanel } from '@/components/TrainedGesturesPanel';
+import { fetchMlGestureCatalog, type MlGestureCatalog } from '@/lib/mlGestures';
 
 type PracticeMode = 'identify' | 'perform';
 type MlStatus = 'checking' | 'online' | 'offline';
@@ -32,8 +39,8 @@ function ConfidenceRing({ value, size = 64 }: { value: number; size?: number }) 
   return (
     <div className="relative" style={{ width: size, height: size }}>
       <svg width={size} height={size} className="-rotate-90">
-        <circle cx={size/2} cy={size/2} r={radius} fill="none" stroke="currentColor" strokeWidth={4} className="text-gray-700" />
-        <circle cx={size/2} cy={size/2} r={radius} fill="none" stroke={color} strokeWidth={4}
+        <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="currentColor" strokeWidth={4} className="text-gray-700" />
+        <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke={color} strokeWidth={4}
           strokeDasharray={circumference} strokeDashoffset={offset} strokeLinecap="round"
           className="transition-all duration-300" />
       </svg>
@@ -55,11 +62,14 @@ export default function PracticePage() {
   const [streak, setStreak] = useState(0);
   const [bestStreak, setBestStreak] = useState(0);
   const [correctCount, setCorrectCount] = useState(0);
-  const [hearts, setHearts] = useState(5);
+  const [maxHearts, setMaxHearts] = useState(GAMIFICATION_CONFIG.MAX_HEARTS);
+  const [hearts, setHearts] = useState(GAMIFICATION_CONFIG.MAX_HEARTS);
   const [questionNum, setQuestionNum] = useState(1);
   const [totalQuestions] = useState(10);
   const [loading, setLoading] = useState(true);
+  const [gestureCatalog, setGestureCatalog] = useState<MlGestureCatalog | null>(null);
   const [supportedGestures, setSupportedGestures] = useState<string[]>([]);
+  const [gesturesLoading, setGesturesLoading] = useState(true);
 
   // ML status
   const [mlStatus, setMlStatus] = useState<MlStatus>('checking');
@@ -72,6 +82,7 @@ export default function PracticePage() {
   const [autoRecognizing, setAutoRecognizing] = useState(false);
   const [gestureConfirmed, setGestureConfirmed] = useState(false);
   const [cameraError, setCameraError] = useState('');
+  const [cameraStarting, setCameraStarting] = useState(false);
 
   // IMPORTANT: Video/canvas refs - always rendered in DOM (not conditional)
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -81,26 +92,38 @@ export default function PracticePage() {
   const consecutiveMatchRef = useRef(0);
   const consecutiveFailuresRef = useRef(0);
 
-  // Load supported gestures and check ML health
+  const basePoints = GAMIFICATION_CONFIG.XP_QUIZ_CORRECT;
+  const streakBonusPerStep = GAMIFICATION_CONFIG.XP_GESTURE_RECOGNIZED;
+
+  const loadGestureCatalog = useCallback(async () => {
+    setGesturesLoading(true);
+    const catalog = await fetchMlGestureCatalog();
+    setGestureCatalog(catalog);
+    setSupportedGestures(catalog.staticGestures);
+    setMlStatus(
+      catalog.staticGestures.length > 0 && catalog.mlStatus === 'online'
+        ? 'online'
+        : catalog.mlStatus === 'offline'
+          ? 'offline'
+          : 'offline'
+    );
+    setGesturesLoading(false);
+    return catalog;
+  }, []);
+
   useEffect(() => {
     const initialize = async () => {
       try {
-        const healthRes = await gestureApi.getHealth();
-        if (healthRes.data?.models?.static?.loaded) {
-          setMlStatus('online');
-        } else {
-          setMlStatus('offline');
-        }
+        const statsRes = await gamificationApi.getMyStats();
+        const g = resolveGamificationStats(statsRes.data.data);
+        setMaxHearts(g.maxHearts);
+        setHearts(g.hearts);
       } catch {
-        setMlStatus('offline');
+        setMaxHearts(GAMIFICATION_CONFIG.MAX_HEARTS);
+        setHearts(GAMIFICATION_CONFIG.MAX_HEARTS);
       }
 
-      try {
-        const response = await gestureApi.getSupportedGestures();
-        setSupportedGestures(response.data.gestures || ['A', 'B', 'C']);
-      } catch {
-        setSupportedGestures(['A', 'B', 'C']);
-      }
+      await loadGestureCatalog();
       setLoading(false);
     };
     initialize();
@@ -109,7 +132,7 @@ export default function PracticePage() {
       if (recognitionIntervalRef.current) clearInterval(recognitionIntervalRef.current);
       if (streamRef.current) streamRef.current.getTracks().forEach(track => track.stop());
     };
-  }, []);
+  }, [loadGestureCatalog]);
 
   const generateChallenge = useCallback(() => {
     if (supportedGestures.length === 0) return;
@@ -137,15 +160,27 @@ export default function PracticePage() {
   // Actually, video element is now ALWAYS rendered (hidden via CSS), so ref is always available.
   const startCamera = async () => {
     setCameraError('');
+    if (mlStatus === 'offline') {
+      setCameraError('ML service is offline. Start it on port 8000 (see banner above).');
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraError('Camera needs HTTPS or localhost (http://localhost:3000).');
+      return;
+    }
+    setCameraStarting(true);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', width: 640, height: 480 }
+        video: { facingMode: 'user', width: 640, height: 480 },
       });
-      // Video element is always in DOM now, so ref is always available
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
+      const video = videoRef.current;
+      if (!video) {
+        setCameraError('Camera preview not ready. Try again.');
+        stream.getTracks().forEach((t) => t.stop());
+        return;
       }
+      video.srcObject = stream;
+      await video.play();
       streamRef.current = stream;
       setCameraActive(true);
       setGestureConfirmed(false);
@@ -153,7 +188,9 @@ export default function PracticePage() {
       consecutiveFailuresRef.current = 0;
     } catch (error: unknown) {
       console.error('Failed to start camera:', error);
-      setCameraError('Camera access denied. Please allow camera permissions in your browser.');
+      setCameraError('Camera access denied. Allow camera in browser settings.');
+    } finally {
+      setCameraStarting(false);
     }
   };
 
@@ -269,7 +306,7 @@ export default function PracticePage() {
     setShowResult(true);
     if (correct) {
       const newStreak = streak + 1;
-      setScore(prev => prev + 10 + streak * 2);
+      setScore(prev => prev + basePoints + streak * streakBonusPerStep);
       setStreak(newStreak);
       setCorrectCount(prev => prev + 1);
       if (newStreak > bestStreak) setBestStreak(newStreak);
@@ -282,7 +319,7 @@ export default function PracticePage() {
   const handleNext = () => {
     if (hearts <= 0) {
       setSessionResult({ type: 'gameover', score, streak: bestStreak, correct: correctCount, total: questionNum });
-      setHearts(5); setScore(0); setStreak(0); setBestStreak(0); setCorrectCount(0); setQuestionNum(1);
+      setHearts(maxHearts); setScore(0); setStreak(0); setBestStreak(0); setCorrectCount(0); setQuestionNum(1);
     } else if (questionNum >= totalQuestions) {
       setSessionResult({ type: 'complete', score, streak: bestStreak, correct: correctCount, total: totalQuestions });
       setScore(0); setStreak(0); setBestStreak(0); setCorrectCount(0); setQuestionNum(1);
@@ -305,7 +342,7 @@ export default function PracticePage() {
   if (loading) {
     return (
       <ProtectedRoute>
-        <div className="min-h-screen bg-[#0f1117] p-4 pb-24">
+        <div className={`min-h-screen ${SCHOOL_THEME.canvas} p-4 pb-24`}>
           <div className="max-w-6xl mx-auto">
             <div className="h-10 w-48 bg-gray-800 rounded-lg animate-pulse mb-6" />
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -314,7 +351,7 @@ export default function PracticePage() {
                 <div className="h-8 w-64 bg-gray-800 rounded animate-pulse" />
                 <div className="h-48 bg-gray-800 rounded-2xl animate-pulse" />
                 <div className="grid grid-cols-2 gap-3">
-                  {[1,2,3,4].map(i => <div key={i} className="h-14 bg-gray-800 rounded-xl animate-pulse" />)}
+                  {[1, 2, 3, 4].map(i => <div key={i} className="h-14 bg-gray-800 rounded-xl animate-pulse" />)}
                 </div>
               </div>
             </div>
@@ -326,21 +363,21 @@ export default function PracticePage() {
 
   return (
     <ProtectedRoute>
-      <div className="min-h-screen bg-[#0f1117] text-white pb-24">
+      <div className={`min-h-screen ${SCHOOL_THEME.canvas} pb-24`}>
         {/* Hidden video & canvas - ALWAYS in DOM so refs work */}
         <video ref={videoRef} autoPlay playsInline muted className={cameraActive ? 'hidden' : 'hidden'} style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 0, height: 0 }} />
         <canvas ref={canvasRef} style={{ display: 'none' }} />
 
         {/* Top Header Bar */}
-        <div className="bg-[#161822] border-b border-gray-800">
+        <div className={`${SCHOOL_THEME.surface} border-b ${SCHOOL_THEME.scholar.border}`}>
           <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${SCHOOL_THEME.growth.gradient}`}>
                 <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 11.5V14m0-2.5v-6a1.5 1.5 0 113 0m-3 6a1.5 1.5 0 00-3 0v2a7.5 7.5 0 0015 0v-5a1.5 1.5 0 00-3 0m-6-3V11m0-5.5v-1a1.5 1.5 0 013 0v1m0 0V11m0-5.5a1.5 1.5 0 013 0v3m0 0V11" />
                 </svg>
               </div>
-              <h1 className="text-lg font-bold">ISL Practice Lab</h1>
+              <h1 className={`text-lg font-bold ${SCHOOL_THEME.scholar.text}`}>ISL Practice Lab</h1>
               {mlStatus === 'online' && (
                 <span className="flex items-center gap-1.5 text-xs bg-green-500/10 text-green-400 px-2.5 py-1 rounded-full border border-green-500/20">
                   <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" />
@@ -363,16 +400,14 @@ export default function PracticePage() {
 
             {/* Stats Pills */}
             <div className="flex items-center gap-3">
-              <div className="flex items-center gap-1.5 bg-[#1e2030] px-3 py-1.5 rounded-full text-sm">
-                <span>🔥</span><span className="font-bold text-orange-400">{streak}</span>
+              <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm ${SCHOOL_THEME.milestone.bg} border ${SCHOOL_THEME.milestone.border}`}>
+                <span className={SCHOOL_THEME.milestone.icon}>🔥</span>
+                <span className={`font-bold ${SCHOOL_THEME.milestone.text}`}>{streak}</span>
               </div>
-              <div className="flex items-center gap-0.5">
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <span key={i} className={`text-sm transition-all ${i < hearts ? '' : 'opacity-20 grayscale'}`}>❤️</span>
-                ))}
-              </div>
-              <div className="flex items-center gap-1.5 bg-[#1e2030] px-3 py-1.5 rounded-full text-sm">
-                <span>⭐</span><span className="font-bold text-yellow-400">{score}</span>
+              <HeartsDisplay hearts={hearts} maxHearts={maxHearts} size="sm" />
+              <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm ${SCHOOL_THEME.growth.bg} border ${SCHOOL_THEME.growth.border}`}>
+                <span className={SCHOOL_THEME.growth.icon}>⭐</span>
+                <span className={`font-bold ${SCHOOL_THEME.growth.text}`}>{score}</span>
               </div>
             </div>
           </div>
@@ -382,7 +417,7 @@ export default function PracticePage() {
             <div className="flex items-center gap-3">
               <span className="text-xs text-gray-500 min-w-[3rem]">{questionNum}/{totalQuestions}</span>
               <div className="flex-1 h-1.5 bg-gray-800 rounded-full overflow-hidden">
-                <div className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full transition-all duration-500"
+                <div className={`h-full rounded-full transition-all duration-500 ${SCHOOL_THEME.growth.gradient}`}
                   style={{ width: `${(questionNum / totalQuestions) * 100}%` }} />
               </div>
               <span className="text-xs text-gray-500">{Math.round((questionNum / totalQuestions) * 100)}%</span>
@@ -395,9 +430,8 @@ export default function PracticePage() {
           <div className="flex bg-[#161822] rounded-xl p-1 border border-gray-800">
             <button
               onClick={() => { setMode('identify'); stopCamera(); generateChallenge(); }}
-              className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-2 ${
-                mode === 'identify' ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/25' : 'text-gray-400 hover:text-white'
-              }`}
+              className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-2 ${mode === 'identify' ? `${SCHOOL_THEME.growth.bgSolid} text-white shadow-lg` : `${SCHOOL_THEME.scholar.muted} hover:text-primary-700`
+                }`}
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
@@ -405,18 +439,28 @@ export default function PracticePage() {
               Identify Sign
             </button>
             <button
-              onClick={() => { if (mlStatus !== 'online') return; setMode('perform'); generateChallenge(); }}
-              disabled={mlStatus !== 'online'}
-              className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-2 ${
-                mode === 'perform' ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/25'
-                  : mlStatus !== 'online' ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400 hover:text-white'
-              }`}
+              onClick={async () => {
+                const catalog = await loadGestureCatalog();
+                if (catalog.staticGestures.length === 0) return;
+                setMode('perform');
+                const g = catalog.staticGestures[Math.floor(Math.random() * catalog.staticGestures.length)];
+                setCurrentChallenge({ id: Date.now().toString(), name: g });
+                setGestureResult(null);
+                setGestureConfirmed(false);
+                setShowResult(false);
+              }}
+              disabled={supportedGestures.length === 0 || mlStatus === 'offline'}
+              className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-2 ${mode === 'perform' ? `${SCHOOL_THEME.growth.bgSolid} text-white shadow-lg`
+                : supportedGestures.length === 0 ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400 hover:text-white'
+                }`}
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
               </svg>
               Perform Gesture
-              {mlStatus !== 'online' && <span className="text-[9px] opacity-50">(ML required)</span>}
+              {supportedGestures.length === 0 && (
+                <span className="text-[9px] opacity-50">(no gestures)</span>
+              )}
             </button>
           </div>
         </div>
@@ -457,17 +501,16 @@ export default function PracticePage() {
                         key={opt}
                         onClick={() => handleIdentifyAnswer(opt)}
                         disabled={showResult}
-                        className={`relative px-5 py-4 rounded-xl border-2 font-medium transition-all active:scale-[0.97] text-left ${
-                          showResult
-                            ? opt === currentChallenge?.name
-                              ? 'bg-green-500/10 border-green-500 text-green-400'
-                              : selected === opt
+                        className={`relative px-5 py-4 rounded-xl border-2 font-medium transition-all active:scale-[0.97] text-left ${showResult
+                          ? opt === currentChallenge?.name
+                            ? 'bg-green-500/10 border-green-500 text-green-400'
+                            : selected === opt
                               ? 'bg-red-500/10 border-red-500 text-red-400'
                               : 'bg-[#1e2030] border-gray-700 text-gray-600'
-                            : selected === opt
+                          : selected === opt
                             ? 'bg-indigo-500/10 border-indigo-500 text-indigo-300'
                             : 'bg-[#1e2030] border-gray-700 text-gray-300 hover:border-indigo-500/50 hover:bg-indigo-500/5'
-                        }`}
+                          }`}
                       >
                         <span className="text-xs text-gray-600 block mb-1">{String.fromCharCode(65 + idx)}</span>
                         <span className="text-base">{opt}</span>
@@ -482,16 +525,15 @@ export default function PracticePage() {
 
                   {/* Result Feedback */}
                   {showResult && (
-                    <div className={`mt-5 p-4 rounded-xl border ${
-                      isCorrect ? 'bg-green-500/5 border-green-500/20' : 'bg-red-500/5 border-red-500/20'
-                    }`}>
+                    <div className={`mt-5 p-4 rounded-xl border ${isCorrect ? 'bg-green-500/5 border-green-500/20' : 'bg-red-500/5 border-red-500/20'
+                      }`}>
                       <div className="flex items-center gap-3">
                         <div className={`w-10 h-10 rounded-full flex items-center justify-center ${isCorrect ? 'bg-green-500/20' : 'bg-red-500/20'}`}>
                           <span className="text-xl">{isCorrect ? '🎉' : '😕'}</span>
                         </div>
                         <div>
                           <p className={`font-bold ${isCorrect ? 'text-green-400' : 'text-red-400'}`}>
-                            {isCorrect ? `Correct! +${10 + (streak - 1) * 2} points` : 'Not quite right'}
+                            {isCorrect ? `Correct! +${basePoints + Math.max(0, streak - 1) * streakBonusPerStep} points` : 'Not quite right'}
                           </p>
                           {!isCorrect && <p className="text-sm text-gray-500">Answer: <strong className="text-gray-300">{currentChallenge?.name}</strong></p>}
                         </div>
@@ -510,208 +552,236 @@ export default function PracticePage() {
             </div>
           ) : (
             /* ═══ PERFORM GESTURE MODE ═══ */
+            <div className="space-y-4">
+              <MlStatusBanner />
+              <TrainedGesturesPanel catalog={gestureCatalog} loading={gesturesLoading} />
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              {/* Camera Feed - Main Panel */}
-              <div className="lg:col-span-2">
-                <div className="bg-[#161822] rounded-2xl border border-gray-800 overflow-hidden">
-                  {/* Camera viewport */}
-                  <div className="relative aspect-[4/3] bg-black">
-                    {cameraActive ? (
-                      <>
-                        {/* Mirror the camera feed onto a visible video element via canvas */}
-                        <VideoMirror sourceVideo={videoRef} active={cameraActive} />
+                {/* Camera Feed - Main Panel */}
+                <div className="lg:col-span-2">
+                  <div className="bg-[#161822] rounded-2xl border border-gray-800 overflow-hidden">
+                    {/* Camera viewport */}
+                    <div className="relative aspect-[4/3] bg-black">
+                      {cameraActive ? (
+                        <>
+                          {/* Mirror the camera feed onto a visible video element via canvas */}
+                          <VideoMirror sourceVideo={videoRef} active={cameraActive} />
 
-                        {/* Corner brackets */}
-                        <div className="absolute inset-6 pointer-events-none">
-                          <div className="absolute top-0 left-0 w-8 h-8 border-t-2 border-l-2 border-indigo-400/60 rounded-tl" />
-                          <div className="absolute top-0 right-0 w-8 h-8 border-t-2 border-r-2 border-indigo-400/60 rounded-tr" />
-                          <div className="absolute bottom-0 left-0 w-8 h-8 border-b-2 border-l-2 border-indigo-400/60 rounded-bl" />
-                          <div className="absolute bottom-0 right-0 w-8 h-8 border-b-2 border-r-2 border-indigo-400/60 rounded-br" />
-                        </div>
+                          {/* Corner brackets */}
+                          <div className="absolute inset-6 pointer-events-none">
+                            <div className="absolute top-0 left-0 w-8 h-8 border-t-2 border-l-2 border-indigo-400/60 rounded-tl" />
+                            <div className="absolute top-0 right-0 w-8 h-8 border-t-2 border-r-2 border-indigo-400/60 rounded-tr" />
+                            <div className="absolute bottom-0 left-0 w-8 h-8 border-b-2 border-l-2 border-indigo-400/60 rounded-bl" />
+                            <div className="absolute bottom-0 right-0 w-8 h-8 border-b-2 border-r-2 border-indigo-400/60 rounded-br" />
+                          </div>
 
-                        {/* Recognition Overlay */}
-                        {gestureResult && (
-                          <div className={`absolute top-4 left-4 right-4 px-4 py-3 rounded-xl backdrop-blur-md transition-all ${
-                            gestureConfirmed ? 'bg-green-500/80' : 'bg-black/60'
-                          }`}>
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-3">
-                                {gestureConfirmed ? (
-                                  <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                                  </svg>
-                                ) : recognizing ? (
-                                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                                ) : null}
-                                <div>
-                                  <p className="text-white font-bold text-lg">{gestureResult.gesture}</p>
-                                  {gestureConfirmed && <p className="text-green-100 text-xs">Matched! Auto-advancing...</p>}
+                          {/* Recognition Overlay */}
+                          {gestureResult && (
+                            <div className={`absolute top-4 left-4 right-4 px-4 py-3 rounded-xl backdrop-blur-md transition-all ${gestureConfirmed ? 'bg-green-500/80' : 'bg-black/60'
+                              }`}>
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                  {gestureConfirmed ? (
+                                    <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                    </svg>
+                                  ) : recognizing ? (
+                                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                  ) : null}
+                                  <div>
+                                    <p className="text-white font-bold text-lg">{gestureResult.gesture}</p>
+                                    {gestureConfirmed && <p className="text-green-100 text-xs">Matched! Auto-advancing...</p>}
+                                  </div>
                                 </div>
+                                <ConfidenceRing value={gestureResult.confidence} />
                               </div>
-                              <ConfidenceRing value={gestureResult.confidence} />
                             </div>
-                          </div>
-                        )}
+                          )}
 
-                        {/* Scanning animation */}
-                        {autoRecognizing && !gestureConfirmed && !gestureResult && (
-                          <div className="absolute inset-0 flex items-center justify-center">
-                            <div className="flex flex-col items-center gap-3">
-                              <div className="w-16 h-16 border-2 border-indigo-400/40 rounded-full flex items-center justify-center">
-                                <div className="w-12 h-12 border-2 border-indigo-400/60 border-t-transparent rounded-full animate-spin" />
+                          {/* Scanning animation */}
+                          {autoRecognizing && !gestureConfirmed && !gestureResult && (
+                            <div className="absolute inset-0 flex items-center justify-center">
+                              <div className="flex flex-col items-center gap-3">
+                                <div className="w-16 h-16 border-2 border-indigo-400/40 rounded-full flex items-center justify-center">
+                                  <div className="w-12 h-12 border-2 border-indigo-400/60 border-t-transparent rounded-full animate-spin" />
+                                </div>
+                                <span className="text-sm text-gray-400 bg-black/50 px-3 py-1 rounded-full backdrop-blur">Scanning gesture...</span>
                               </div>
-                              <span className="text-sm text-gray-400 bg-black/50 px-3 py-1 rounded-full backdrop-blur">Scanning gesture...</span>
                             </div>
-                          </div>
-                        )}
+                          )}
+                        </>
+                      ) : (
+                        <div className="flex flex-col items-center justify-center h-full bg-gradient-to-br from-gray-900 to-[#0f1117]">
+                          {cameraError ? (
+                            <div className="text-center px-8">
+                              <div className="w-16 h-16 rounded-full bg-red-500/10 flex items-center justify-center mx-auto mb-4">
+                                <svg className="w-8 h-8 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+                                </svg>
+                              </div>
+                              <p className="text-red-400 text-sm mb-2">{cameraError}</p>
+                              <button onClick={startCamera} className="text-indigo-400 text-sm underline">Try again</button>
+                            </div>
+                          ) : (
+                            <div className="text-center">
+                              <div className="w-20 h-20 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center mx-auto mb-4">
+                                <svg className="w-10 h-10 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                </svg>
+                              </div>
+                              <p className="text-gray-400 text-sm mb-1">Camera Preview</p>
+                              <p className="text-gray-600 text-xs">Click start to begin recognition</p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Camera Controls Bar */}
+                    <div className="px-4 py-3 bg-[#1a1c2e] border-t border-gray-800 flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-xs text-gray-500">
+                        <span className={`w-2 h-2 rounded-full ${cameraActive ? 'bg-green-400 animate-pulse' : 'bg-gray-600'}`} />
+                        {cameraActive ? 'Camera Active' : 'Camera Off'}
+                      </div>
+                      {!cameraActive ? (
+                        <button onClick={startCamera}
+                          disabled={cameraStarting || mlStatus === 'offline'}
+                          className="px-5 py-2 bg-primary-600 text-white text-sm rounded-lg font-medium hover:bg-primary-700 transition flex items-center gap-2 shadow-lg disabled:opacity-50">
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                          </svg>
+                          {cameraStarting ? 'Starting…' : 'Start Camera'}
+                        </button>
+                      ) : (
+                        <button onClick={stopCamera}
+                          className="px-5 py-2 bg-gray-700 text-gray-300 text-sm rounded-lg font-medium hover:bg-gray-600 transition">
+                          Stop
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Right Sidebar - Challenge Info */}
+                <div className="lg:col-span-1 space-y-4">
+                  {/* Target Gesture Card */}
+                  <div className={`${SCHOOL_THEME.surface} p-5`}>
+                    <p className={`text-xs uppercase tracking-wider mb-3 ${SCHOOL_THEME.scholar.muted}`}>
+                      Target Gesture
+                    </p>
+                    {currentChallenge?.name ? (
+                      <>
+                        <div className={`w-full aspect-square rounded-xl flex items-center justify-center border mb-3 ${SCHOOL_THEME.growth.bg} ${SCHOOL_THEME.growth.border}`}>
+                          <span className={`text-6xl font-bold ${SCHOOL_THEME.growth.text}`}>
+                            {currentChallenge.name}
+                          </span>
+                        </div>
+                        <p className={`text-center text-2xl font-bold ${SCHOOL_THEME.scholar.text}`}>
+                          {currentChallenge.name}
+                        </p>
+                        <p className={`text-center text-xs mt-2 ${SCHOOL_THEME.scholar.muted}`}>
+                          Perform this sign clearly in front of the camera
+                        </p>
                       </>
                     ) : (
-                      <div className="flex flex-col items-center justify-center h-full bg-gradient-to-br from-gray-900 to-[#0f1117]">
-                        {cameraError ? (
-                          <div className="text-center px-8">
-                            <div className="w-16 h-16 rounded-full bg-red-500/10 flex items-center justify-center mx-auto mb-4">
-                              <svg className="w-8 h-8 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
-                              </svg>
-                            </div>
-                            <p className="text-red-400 text-sm mb-2">{cameraError}</p>
-                            <button onClick={startCamera} className="text-indigo-400 text-sm underline">Try again</button>
-                          </div>
-                        ) : (
-                          <div className="text-center">
-                            <div className="w-20 h-20 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center mx-auto mb-4">
-                              <svg className="w-10 h-10 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                              </svg>
-                            </div>
-                            <p className="text-gray-400 text-sm mb-1">Camera Preview</p>
-                            <p className="text-gray-600 text-xs">Click start to begin recognition</p>
-                          </div>
-                        )}
+                      <div className={`rounded-xl p-6 text-center border ${SCHOOL_THEME.milestone.border} ${SCHOOL_THEME.milestone.bg}`}>
+                        <p className={`text-sm font-medium ${SCHOOL_THEME.milestone.text}`}>
+                          No target gesture ready
+                        </p>
+                        <p className={`text-xs mt-2 ${SCHOOL_THEME.scholar.muted}`}>
+                          {supportedGestures.length === 0
+                            ? 'ML returned 0 static gestures. Start the ML service and ensure gesture_model.pkl is loaded.'
+                            : 'Switch to Perform Gesture again or tap reload below.'}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const catalog = await loadGestureCatalog();
+                            if (catalog.staticGestures.length > 0) generateChallenge();
+                          }}
+                          className={`mt-4 px-4 py-2 rounded-lg text-sm font-medium text-white ${SCHOOL_THEME.growth.bgSolid}`}
+                        >
+                          Reload gestures
+                        </button>
                       </div>
                     )}
                   </div>
 
-                  {/* Camera Controls Bar */}
-                  <div className="px-4 py-3 bg-[#1a1c2e] border-t border-gray-800 flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-xs text-gray-500">
-                      <span className={`w-2 h-2 rounded-full ${cameraActive ? 'bg-green-400 animate-pulse' : 'bg-gray-600'}`} />
-                      {cameraActive ? 'Camera Active' : 'Camera Off'}
-                    </div>
-                    {!cameraActive ? (
-                      <button onClick={startCamera}
-                        className="px-5 py-2 bg-indigo-500 text-white text-sm rounded-lg font-medium hover:bg-indigo-600 transition flex items-center gap-2 shadow-lg shadow-indigo-500/20">
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                        </svg>
-                        Start Camera
-                      </button>
-                    ) : (
-                      <button onClick={stopCamera}
-                        className="px-5 py-2 bg-gray-700 text-gray-300 text-sm rounded-lg font-medium hover:bg-gray-600 transition">
-                        Stop
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Right Sidebar - Challenge Info */}
-              <div className="lg:col-span-1 space-y-4">
-                {/* Target Gesture Card */}
-                <div className="bg-[#161822] rounded-2xl border border-gray-800 p-5">
-                  <p className="text-xs text-gray-500 uppercase tracking-wider mb-3">Target Gesture</p>
-                  <div className="w-full aspect-square bg-gradient-to-br from-indigo-500/10 to-purple-500/10 rounded-xl flex items-center justify-center border border-indigo-500/20 mb-3">
-                    <span className="text-7xl font-bold bg-gradient-to-br from-indigo-400 to-purple-400 bg-clip-text text-transparent">
-                      {currentChallenge?.name?.charAt(0)}
-                    </span>
-                  </div>
-                  <p className="text-center text-xl font-bold text-white">{currentChallenge?.name}</p>
-                  <p className="text-center text-xs text-gray-500 mt-1">Show this sign to the camera</p>
-                </div>
-
-                {/* Live Stats */}
-                <div className="bg-[#161822] rounded-2xl border border-gray-800 p-5">
-                  <p className="text-xs text-gray-500 uppercase tracking-wider mb-3">Recognition Status</p>
-                  <div className="space-y-3">
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm text-gray-400">Detected</span>
-                      <span className="text-sm font-mono font-bold text-white">{gestureResult?.gesture || '—'}</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm text-gray-400">Confidence</span>
-                      <span className={`text-sm font-mono font-bold ${
-                        gestureResult && gestureResult.confidence >= ML_CONFIG.CONFIDENCE_THRESHOLD ? 'text-green-400' : 'text-gray-500'
-                      }`}>{gestureResult ? `${Math.round(gestureResult.confidence * 100)}%` : '—'}</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm text-gray-400">Threshold</span>
-                      <span className="text-sm font-mono text-gray-500">{Math.round(ML_CONFIG.CONFIDENCE_THRESHOLD * 100)}%</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm text-gray-400">Status</span>
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                        gestureConfirmed ? 'bg-green-500/10 text-green-400 border border-green-500/20'
+                  {/* Live Stats */}
+                  <div className="bg-[#161822] rounded-2xl border border-gray-800 p-5">
+                    <p className="text-xs text-gray-500 uppercase tracking-wider mb-3">Recognition Status</p>
+                    <div className="space-y-3">
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm text-gray-400">Detected</span>
+                        <span className="text-sm font-mono font-bold text-white">{gestureResult?.gesture || '—'}</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm text-gray-400">Confidence</span>
+                        <span className={`text-sm font-mono font-bold ${gestureResult && gestureResult.confidence >= ML_CONFIG.CONFIDENCE_THRESHOLD ? 'text-green-400' : 'text-gray-500'
+                          }`}>{gestureResult ? `${Math.round(gestureResult.confidence * 100)}%` : '—'}</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm text-gray-400">Threshold</span>
+                        <span className="text-sm font-mono text-gray-500">{Math.round(ML_CONFIG.CONFIDENCE_THRESHOLD * 100)}%</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm text-gray-400">Status</span>
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${gestureConfirmed ? 'bg-green-500/10 text-green-400 border border-green-500/20'
                           : autoRecognizing ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20'
-                          : 'bg-gray-800 text-gray-500 border border-gray-700'
-                      }`}>
-                        {gestureConfirmed ? 'MATCHED' : autoRecognizing ? 'SCANNING' : 'IDLE'}
-                      </span>
-                    </div>
-                    {/* Confidence Bar */}
-                    <div>
-                      <div className="h-2 bg-gray-800 rounded-full overflow-hidden mt-2">
-                        <div className={`h-full rounded-full transition-all duration-300 ${
-                          gestureResult && gestureResult.confidence >= ML_CONFIG.CONFIDENCE_THRESHOLD
+                            : 'bg-gray-800 text-gray-500 border border-gray-700'
+                          }`}>
+                          {gestureConfirmed ? 'MATCHED' : autoRecognizing ? 'SCANNING' : 'IDLE'}
+                        </span>
+                      </div>
+                      {/* Confidence Bar */}
+                      <div>
+                        <div className="h-2 bg-gray-800 rounded-full overflow-hidden mt-2">
+                          <div className={`h-full rounded-full transition-all duration-300 ${gestureResult && gestureResult.confidence >= ML_CONFIG.CONFIDENCE_THRESHOLD
                             ? 'bg-gradient-to-r from-green-500 to-emerald-400'
                             : 'bg-gradient-to-r from-yellow-500 to-orange-400'
-                        }`} style={{ width: `${(gestureResult?.confidence || 0) * 100}%` }} />
+                            }`} style={{ width: `${(gestureResult?.confidence || 0) * 100}%` }} />
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
 
-                {/* Result Feedback in sidebar */}
-                {showResult && (
-                  <div className={`rounded-2xl border p-5 ${
-                    isCorrect ? 'bg-green-500/5 border-green-500/20' : 'bg-red-500/5 border-red-500/20'
-                  }`}>
-                    <div className="text-center">
-                      <span className="text-4xl block mb-2">{isCorrect ? '🎉' : '😕'}</span>
-                      <p className={`font-bold ${isCorrect ? 'text-green-400' : 'text-red-400'}`}>
-                        {isCorrect ? `+${10 + (streak - 1) * 2} pts` : 'Incorrect'}
-                      </p>
+                  {/* Result Feedback in sidebar */}
+                  {showResult && (
+                    <div className={`rounded-2xl border p-5 ${isCorrect ? 'bg-green-500/5 border-green-500/20' : 'bg-red-500/5 border-red-500/20'
+                      }`}>
+                      <div className="text-center">
+                        <span className="text-4xl block mb-2">{isCorrect ? '🎉' : '😕'}</span>
+                        <p className={`font-bold ${isCorrect ? 'text-green-400' : 'text-red-400'}`}>
+                          {isCorrect ? `+${basePoints + Math.max(0, streak - 1) * streakBonusPerStep} pts` : 'Incorrect'}
+                        </p>
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
 
-                {showResult && (
-                  <button onClick={handleNext}
-                    className="w-full py-3.5 bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-semibold rounded-xl shadow-lg shadow-indigo-500/20 transition-all active:scale-[0.98]">
-                    {questionNum >= totalQuestions ? 'See Results' : hearts <= 0 ? 'Try Again' : 'Next →'}
-                  </button>
-                )}
+                  {showResult && (
+                    <button onClick={handleNext}
+                      className="w-full py-3.5 bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-semibold rounded-xl shadow-lg shadow-indigo-500/20 transition-all active:scale-[0.98]">
+                      {questionNum >= totalQuestions ? 'See Results' : hearts <= 0 ? 'Try Again' : 'Next →'}
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           )}
 
           {/* Available Gestures Footer */}
-          <div className="mt-6 p-3 bg-[#161822] rounded-xl border border-gray-800">
-            <p className="text-xs text-gray-600 text-center">
-              <span className="text-gray-500 font-medium">Supported:</span>{' '}
-              {supportedGestures.slice(0, 15).join(' · ')}
-              {supportedGestures.length > 15 && <span className="text-gray-600"> +{supportedGestures.length - 15} more</span>}
+          {supportedGestures.length > 0 && (
+            <p className={`text-xs text-center mt-4 ${SCHOOL_THEME.scholar.muted}`}>
+              Random targets are chosen from: {supportedGestures.join(', ')}
             </p>
-          </div>
+          )}
         </div>
 
         {/* ═══ Session Result Modal ═══ */}
         {sessionResult && (
           <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
             <div className="bg-[#161822] border border-gray-700 rounded-2xl p-8 max-w-md w-full text-center shadow-2xl">
-              <div className={`w-24 h-24 rounded-full mx-auto mb-5 flex items-center justify-center ${
-                sessionResult.type === 'complete' ? 'bg-green-500/10 border-2 border-green-500/30' : 'bg-red-500/10 border-2 border-red-500/30'
-              }`}>
+              <div className={`w-24 h-24 rounded-full mx-auto mb-5 flex items-center justify-center ${sessionResult.type === 'complete' ? 'bg-green-500/10 border-2 border-green-500/30' : 'bg-red-500/10 border-2 border-red-500/30'
+                }`}>
                 <span className="text-5xl">{sessionResult.type === 'complete' ? '🏆' : '💔'}</span>
               </div>
               <h2 className="text-2xl font-bold text-white mb-1">
@@ -743,11 +813,12 @@ export default function PracticePage() {
               </button>
             </div>
           </div>
+
         )}
-      </div>
-    </ProtectedRoute>
-  );
-}
+          </div>
+        </ProtectedRoute>
+      );
+    }
 
 // Component to mirror the hidden video onto a visible canvas
 function VideoMirror({ sourceVideo, active }: { sourceVideo: React.RefObject<HTMLVideoElement | null>; active: boolean }) {

@@ -8,6 +8,9 @@ import {
 import { useAuthStore } from '@/store/authStore';
 import { gamificationApi, classApi, userApi } from '@/lib/api';
 import { ROLES } from '@/lib/config';
+import { resolveGamificationStats } from '@/lib/gamificationDisplay';
+import { SCHOOL_THEME } from '@/lib/schoolTheme';
+import { SchoolStatCard } from '@/components/gamification';
 import CustomHeader from '@/components/CustomHeader';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -331,20 +334,15 @@ function StudentProfile() {
       .finally(() => setLoading(false));
   }, []);
 
-  const statItems = [
-    { icon: Flame, label: 'Day Streak', value: `${stats?.streak || 0}`, color: 'text-orange-500' },
-    { icon: Zap, label: 'Total XP', value: `${stats?.xp || 0}`, color: 'text-primary' },
-    { icon: BookCheck, label: 'Lessons Done', value: `${stats?.completedLessonsCount || 0}`, color: 'text-emerald-500' },
-    { icon: Award, label: 'Badges', value: `${stats?.achievementsCount || 0}`, color: 'text-amber-500' },
-  ];
+  const g = resolveGamificationStats(stats);
 
   return (
     <div className="p-4 max-w-lg mx-auto space-y-4">
       <AvatarCard
         initials={`${user?.firstName?.[0]}${user?.lastName?.[0]}`}
         name={`${user?.firstName} ${user?.lastName}`}
-        subtitle={`Level ${stats?.level || 1}`}
-        gradientClass="bg-gradient-to-br from-indigo-500 to-purple-600"
+        subtitle={`Level ${g.level}`}
+        gradientClass={SCHOOL_THEME.growth.gradient}
         badgeLabel="Student"
         badgeVariant="info"
       />
@@ -363,15 +361,10 @@ function StudentProfile() {
         </div>
       ) : (
         <div className="grid grid-cols-2 gap-3">
-          {statItems.map(({ icon: Icon, label, value, color }) => (
-            <Card key={label}>
-              <CardContent className="p-4 text-center">
-                <Icon className={`h-5 w-5 mx-auto mb-1 ${color}`} />
-                <div className="text-2xl font-bold">{value}</div>
-                <div className="text-xs text-muted-foreground">{label}</div>
-              </CardContent>
-            </Card>
-          ))}
+          <SchoolStatCard semantic="milestone" label="Day Streak" value={g.streak} icon={Flame} />
+          <SchoolStatCard semantic="growth" label="Total XP" value={g.xp.toLocaleString()} icon={Zap} />
+          <SchoolStatCard semantic="growth" label="Lessons Done" value={g.completedLessonsCount} icon={BookCheck} />
+          <SchoolStatCard semantic="milestone" label="Badges" value={g.achievementsCount} icon={Award} />
         </div>
       )}
 

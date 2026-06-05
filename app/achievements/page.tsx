@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { gamificationApi } from '@/lib/api';
 import ProtectedRoute from '@/components/auth/ProtectedRoute';
+import { SCHOOL_THEME } from '@/lib/schoolTheme';
+import { RewardChips } from '@/components/gamification';
 import type { Achievement, AchievementCategory } from '@/types';
 
 interface AchievementWithStatus extends Achievement {
@@ -66,8 +68,8 @@ export default function AchievementsPage() {
   if (loading) {
     return (
       <ProtectedRoute>
-        <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-500"></div>
+        <div className={`min-h-screen flex items-center justify-center ${SCHOOL_THEME.canvas}`}>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
         </div>
       </ProtectedRoute>
     );
@@ -75,9 +77,8 @@ export default function AchievementsPage() {
 
   return (
     <ProtectedRoute>
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 pb-20">
-        {/* Header */}
-        <div className="bg-gradient-to-r from-purple-500 to-indigo-600 text-white p-6">
+      <div className={`min-h-screen ${SCHOOL_THEME.canvas} pb-20`}>
+        <div className={`${SCHOOL_THEME.milestone.gradient} text-white p-6`}>
           <button
             onClick={() => router.back()}
             className="flex items-center text-white/80 hover:text-white mb-4"
@@ -172,15 +173,8 @@ export default function AchievementsPage() {
 
               {/* Rewards */}
               {achievement.isEarned && (
-                <div className="flex items-center justify-center space-x-2 mt-2 text-xs">
-                  <span className="flex items-center text-yellow-600">
-                    ⭐ {achievement.xpReward}
-                  </span>
-                  {achievement.gemsReward > 0 && (
-                    <span className="flex items-center text-blue-600">
-                      💎 {achievement.gemsReward}
-                    </span>
-                  )}
+                <div className="flex justify-center mt-2">
+                  <RewardChips xp={achievement.xpReward} gems={achievement.gemsReward} />
                 </div>
               )}
 

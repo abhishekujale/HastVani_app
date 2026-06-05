@@ -78,6 +78,9 @@ export const GAMIFICATION_CONFIG = {
   XP_DAILY_GOAL_MET: parseInt(process.env.NEXT_PUBLIC_XP_DAILY_GOAL_MET || '15', 10),
   XP_STREAK_MAINTAIN: parseInt(process.env.NEXT_PUBLIC_XP_STREAK_MAINTAIN || '5', 10),
   XP_ASSIGNMENT_PERFECT: parseInt(process.env.NEXT_PUBLIC_XP_ASSIGNMENT_PERFECT || '50', 10),
+
+  /** Default quiz question points (matches server lesson question schema) */
+  QUESTION_POINTS_DEFAULT: parseInt(process.env.NEXT_PUBLIC_QUESTION_POINTS_DEFAULT || '10', 10),
   
   // Level Thresholds
   LEVEL_THRESHOLDS: [

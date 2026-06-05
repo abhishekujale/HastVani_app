@@ -4,6 +4,10 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { lessonApi, gestureApi, signApi, authApi, assignmentApi } from '@/lib/api';
 import ProtectedRoute from '@/components/auth/ProtectedRoute';
+import { MlStatusBanner } from '@/components/MlStatusBanner';
+import { SCHOOL_THEME } from '@/lib/schoolTheme';
+import { RewardChips } from '@/components/gamification';
+import { hasReward } from '@/lib/gamificationDisplay';
 import type { Lesson, ContentBlock, Question } from '@/types';
 
 interface QuestionAnswer {
@@ -95,22 +99,37 @@ export default function LessonPlayerPage() {
     };
   }, [lessonId]);
 
+  const [cameraError, setCameraError] = useState('');
+  const [cameraStarting, setCameraStarting] = useState(false);
+
   const startCamera = async () => {
+    setCameraError('');
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraError('Camera requires HTTPS or localhost. Open http://localhost:3000');
+      return;
+    }
+    setCameraStarting(true);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', width: 640, height: 480 }
+        video: { facingMode: 'user', width: 640, height: 480 },
       });
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-        streamRef.current = stream;
-        setCameraActive(true);
-        setGestureConfirmed(false);
-        consecutiveMatchRef.current = 0;
+      const video = videoRef.current;
+      if (!video) {
+        setCameraError('Camera preview not ready. Please try again.');
+        stream.getTracks().forEach((t) => t.stop());
+        return;
       }
+      video.srcObject = stream;
+      await video.play();
+      streamRef.current = stream;
+      setCameraActive(true);
+      setGestureConfirmed(false);
+      consecutiveMatchRef.current = 0;
     } catch (error) {
       console.error('Failed to start camera:', error);
-      alert('Could not access camera. Please allow camera permissions.');
+      setCameraError('Could not access camera. Allow camera permission in your browser.');
+    } finally {
+      setCameraStarting(false);
     }
   };
 
@@ -611,6 +630,7 @@ export default function LessonPlayerPage() {
     if (question.type === 'gesture_recognition') {
       return (
         <div className="space-y-6">
+          <MlStatusBanner compact />
           <div className="text-center">
             <h3 className="text-xl font-bold text-gray-800 dark:text-white mb-2">
               {question.question}
@@ -620,19 +640,20 @@ export default function LessonPlayerPage() {
             </p>
           </div>
 
-          {/* Camera View */}
+          {/* Camera View — video stays mounted so ref works when starting camera */}
           <div className="relative aspect-video max-w-lg mx-auto bg-gray-900 rounded-xl overflow-hidden">
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              className={cameraActive ? 'w-full h-full object-cover' : 'hidden'}
+              style={cameraActive ? { transform: 'scaleX(-1)' } : undefined}
+            />
+            <canvas ref={canvasRef} className="hidden" />
+
             {cameraActive ? (
               <>
-                <video
-                  ref={videoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }}
-                />
-                <canvas ref={canvasRef} style={{ display: 'none' }} />
-
                 {/* Live Recognition Overlay */}
                 {gestureResult && (
                   <div className={`absolute top-4 left-4 right-4 px-4 py-3 rounded-xl backdrop-blur-sm ${
@@ -668,24 +689,29 @@ export default function LessonPlayerPage() {
                 )}
               </>
             ) : (
-              <div className="flex flex-col items-center justify-center h-full text-white">
+              <div className="absolute inset-0 flex flex-col items-center justify-center text-white pointer-events-none">
                 <span className="text-6xl mb-4">📷</span>
                 <p className="text-gray-400">Press the button below to start</p>
               </div>
             )}
           </div>
 
+          {cameraError && (
+            <p className="text-center text-sm text-rose-600 dark:text-rose-400">{cameraError}</p>
+          )}
+
           {/* Camera Controls */}
           <div className="flex justify-center space-x-4">
             {!cameraActive ? (
               <button
                 onClick={startCamera}
-                className="px-6 py-3 bg-blue-500 text-white rounded-xl font-medium hover:bg-blue-600 transition-colors flex items-center"
+                disabled={cameraStarting}
+                className="px-6 py-3 bg-primary-600 text-white rounded-xl font-medium hover:bg-primary-700 transition-colors flex items-center disabled:opacity-60"
               >
                 <svg className="w-5 h-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
                 </svg>
-                Start Camera
+                {cameraStarting ? 'Starting…' : 'Start Camera'}
               </button>
             ) : !gestureConfirmed ? (
               <button
@@ -798,8 +824,8 @@ export default function LessonPlayerPage() {
 
     return (
       <ProtectedRoute>
-        <div className="min-h-screen bg-gradient-to-br from-green-400 to-emerald-600 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-3xl p-8 max-w-md w-full text-center shadow-2xl">
+        <div className={`min-h-screen ${SCHOOL_THEME.growth.gradient} flex items-center justify-center p-4`}>
+          <div className={`${SCHOOL_THEME.surface} rounded-3xl p-8 max-w-md w-full text-center shadow-2xl`}>
             <div className="text-6xl mb-4">
               {percentage >= 80 ? '🎉' : percentage >= 50 ? '👍' : '💪'}
             </div>
@@ -844,17 +870,24 @@ export default function LessonPlayerPage() {
                 <p className="text-2xl font-bold text-green-500">{correctAnswers}/{totalQuestions}</p>
                 <p className="text-sm text-gray-500">Correct</p>
               </div>
-              <div className="bg-gray-50 dark:bg-gray-700 rounded-xl p-4">
-                <p className="text-2xl font-bold text-yellow-500">+{xpEarned || lesson.xpReward}</p>
-                <p className="text-sm text-gray-500">XP Earned</p>
+              <div className={`${SCHOOL_THEME.milestone.bg} rounded-xl p-4 border ${SCHOOL_THEME.milestone.border}`}>
+                <p className={`text-2xl font-bold ${SCHOOL_THEME.milestone.text}`}>
+                  +{xpEarned > 0 ? xpEarned : lesson.xpReward ?? 0}
+                </p>
+                <p className={`text-sm ${SCHOOL_THEME.scholar.muted}`}>XP Earned</p>
               </div>
             </div>
 
-            {/* Actions */}
+            {hasReward(lesson.xpReward) && (
+              <div className="mb-4 flex justify-center">
+                <RewardChips xp={xpEarned > 0 ? xpEarned : lesson.xpReward} />
+              </div>
+            )}
+
             <div className="space-y-3">
               <button
                 onClick={() => router.back()}
-                className="w-full py-4 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-semibold rounded-xl hover:shadow-lg transition-all"
+                className={`w-full py-4 ${SCHOOL_THEME.growth.bgSolid} text-white font-semibold rounded-xl hover:opacity-95 transition-all`}
               >
                 Continue
               </button>

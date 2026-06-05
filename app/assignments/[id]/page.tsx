@@ -18,6 +18,9 @@ import {
 } from 'lucide-react';
 import { assignmentApi, lessonApi } from '@/lib/api';
 import { MEDIA_CONFIG } from '@/lib/config';
+import { getQuestionPoints } from '@/lib/gamificationDisplay';
+import { SCHOOL_THEME } from '@/lib/schoolTheme';
+import { RewardChips } from '@/components/gamification';
 import ProtectedRoute from '@/components/auth/ProtectedRoute';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -222,7 +225,7 @@ export default function AssignmentPage({ params }: { params: Promise<{ id: strin
   const questions = lesson?.questions || [];
   const currentQuestion = questions[quizState.currentQuestionIndex];
   const progress = ((quizState.currentQuestionIndex + 1) / questions.length) * 100;
-  const totalPoints = questions.reduce((sum, q) => sum + (q.points || 10), 0);
+  const totalPoints = questions.reduce((sum, q) => sum + getQuestionPoints(q.points), 0);
 
   const handleAnswerSelect = (answer: string | number) => {
     setQuizState((prev) => ({
@@ -259,7 +262,7 @@ export default function AssignmentPage({ params }: { params: Promise<{ id: strin
       let score = 0;
       questions.forEach((q, idx) => {
         if (quizState.answers[idx] === q.correctAnswer) {
-          score += q.points || 10;
+          score += getQuestionPoints(q.points);
         }
       });
 
@@ -296,15 +299,17 @@ export default function AssignmentPage({ params }: { params: Promise<{ id: strin
 
   const calculateScore = () => {
     let correct = 0;
+    let earnedPoints = 0;
     questions.forEach((q, idx) => {
       if (quizState.answers[idx] === q.correctAnswer) {
         correct += 1;
+        earnedPoints += getQuestionPoints(q.points);
       }
     });
-    return { correct, total: questions.length };
+    return { correct, total: questions.length, earnedPoints, totalPoints };
   };
 
-  const { correct, total } = calculateScore();
+  const { correct, total, earnedPoints } = calculateScore();
   const scorePercentage = (correct / total) * 100;
   const isPassing = scorePercentage >= 70;
 
@@ -354,24 +359,14 @@ export default function AssignmentPage({ params }: { params: Promise<{ id: strin
               </div>
 
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <div className="space-y-1">
-                  <p className="text-xs text-gray-600 dark:text-gray-400">XP Reward</p>
-                  <p className="text-lg font-bold text-blue-600 dark:text-blue-400 flex items-center gap-1">
-                    <Zap className="h-4 w-4" />
-                    {assignment.xpReward}
-                  </p>
+                <div className={`space-y-2 sm:col-span-2 ${SCHOOL_THEME.growth.bg} rounded-lg p-3 border ${SCHOOL_THEME.growth.border}`}>
+                  <p className={`text-xs font-medium ${SCHOOL_THEME.scholar.muted}`}>Rewards</p>
+                  <RewardChips xp={assignment.xpReward} gems={assignment.gemsReward} />
                 </div>
 
                 <div className="space-y-1">
-                  <p className="text-xs text-gray-600 dark:text-gray-400">Gems</p>
-                  <p className="text-lg font-bold text-amber-600 dark:text-amber-400">
-                    💎 {assignment.gemsReward || 10}
-                  </p>
-                </div>
-
-                <div className="space-y-1">
-                  <p className="text-xs text-gray-600 dark:text-gray-400">Questions</p>
-                  <p className="text-lg font-bold text-purple-600 dark:text-purple-400">
+                  <p className={`text-xs ${SCHOOL_THEME.scholar.muted}`}>Questions</p>
+                  <p className={`text-lg font-bold ${SCHOOL_THEME.growth.text}`}>
                     {questions.length}
                   </p>
                 </div>
@@ -459,18 +454,15 @@ export default function AssignmentPage({ params }: { params: Promise<{ id: strin
                       <div className="pt-4 border-t space-y-3">
                         <div className="flex items-center justify-between text-sm">
                           <span className="font-medium">Score:</span>
-                          <span className="font-bold">{correct * 10}/{total * 10}</span>
+                          <span className="font-bold">{earnedPoints}/{totalPoints}</span>
                         </div>
                         <Progress value={scorePercentage} className="h-3" />
                       </div>
 
                       {isPassing && (
-                        <div className="pt-4 space-y-2 text-green-900">
-                          <p className="text-sm font-semibold">Rewards:</p>
-                          <p className="text-lg">
-                            ⭐ +{assignment.xpReward} XP<br />
-                            💎 +{assignment.gemsReward || 10} Gems
-                          </p>
+                        <div className={`pt-4 space-y-2 ${SCHOOL_THEME.success.text}`}>
+                          <p className="text-sm font-semibold">Rewards earned</p>
+                          <RewardChips xp={assignment.xpReward} gems={assignment.gemsReward} layout="stack" />
                         </div>
                       )}
                     </CardContent>
@@ -556,7 +548,7 @@ export default function AssignmentPage({ params }: { params: Promise<{ id: strin
                     <CardHeader>
                       <CardTitle className="text-lg">{currentQuestion?.question}</CardTitle>
                       <p className="text-xs text-muted-foreground mt-2">
-                        Points: <span className="font-bold">{currentQuestion?.points || 10}</span>
+                        Points: <span className="font-bold">{getQuestionPoints(currentQuestion?.points)}</span>
                       </p>
                     </CardHeader>
                     <CardContent className="space-y-4">

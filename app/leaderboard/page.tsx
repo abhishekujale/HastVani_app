@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
 import { gamificationApi } from '@/lib/api';
 import ProtectedRoute from '@/components/auth/ProtectedRoute';
+import { SCHOOL_THEME } from '@/lib/schoolTheme';
 
 interface LeaderboardEntry {
   rank: number;
@@ -77,8 +78,8 @@ export default function LeaderboardPage() {
   if (loading) {
     return (
       <ProtectedRoute>
-        <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-500"></div>
+        <div className={`min-h-screen flex items-center justify-center ${SCHOOL_THEME.canvas}`}>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
         </div>
       </ProtectedRoute>
     );
@@ -86,9 +87,8 @@ export default function LeaderboardPage() {
 
   return (
     <ProtectedRoute>
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 pb-20">
-        {/* Header */}
-        <div className="bg-gradient-to-r from-orange-500 to-red-600 text-white p-6">
+      <div className={`min-h-screen ${SCHOOL_THEME.canvas} pb-20`}>
+        <div className={`${SCHOOL_THEME.milestone.gradient} text-white p-6`}>
           <button
             onClick={() => router.back()}
             className="flex items-center text-white/80 hover:text-white mb-4"

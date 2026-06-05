@@ -276,6 +276,21 @@ export const classApi = {
   addStudent: (id: string, body: { email?: string; userId?: string }) =>
     api.post(`/classes/${id}/students`, body),
 
+  /** Bulk enroll by email array or comma-separated text */
+  addStudentsBulk: (
+    id: string,
+    body: { emails?: string[]; emailsText?: string }
+  ) => api.post(`/classes/${id}/students/bulk`, body),
+
+  /** Bulk enroll from Excel (.xlsx/.xls) or CSV file */
+  addStudentsBulkFile: (id: string, file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.post(`/classes/${id}/students/bulk`, form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
+
   getLeaderboard: (id: string) => api.get(`/classes/${id}/leaderboard`),
 };
 

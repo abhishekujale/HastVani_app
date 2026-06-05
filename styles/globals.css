@@ -23,6 +23,13 @@
     --input: 214.3 31.8% 91.4%;
     --ring: 160 84% 39%;
     --radius: 0.625rem;
+
+    /* School semantic tokens (see lib/schoolTheme.ts) */
+    --school-growth: 160 84% 39%;
+    --school-knowledge: 199 89% 48%;
+    --school-milestone: 38 92% 50%;
+    --school-compassion: 350 89% 60%;
+    --school-canvas: 210 40% 98%;
   }
 
   .dark {
@@ -45,6 +52,12 @@
     --border: 217.2 32.6% 17.5%;
     --input: 217.2 32.6% 17.5%;
     --ring: 160 84% 45%;
+
+    --school-growth: 160 84% 45%;
+    --school-knowledge: 199 89% 55%;
+    --school-milestone: 38 92% 55%;
+    --school-compassion: 350 89% 65%;
+    --school-canvas: 222 47% 11%;
   }
 
   * {

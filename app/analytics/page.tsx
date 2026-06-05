@@ -8,6 +8,7 @@ import {
 import {
   TrendingUp, BookOpen, Clock, Flame, Star,
   Target, AlertTriangle, Trophy, Zap,
+  type LucideIcon,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -15,6 +16,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { analyticsApi } from '@/lib/api';
 import ProtectedRoute from '@/components/auth/ProtectedRoute';
 import CustomHeader from '@/components/CustomHeader';
+import { SCHOOL_THEME } from '@/lib/schoolTheme';
+import type { SchoolSemantic } from '@/lib/schoolTheme';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -36,19 +39,39 @@ interface StudentData {
 
 // ─── Stat card ────────────────────────────────────────────────────────────────
 
-function StatCard({ icon: Icon, label, value, sub, color = 'text-green-500' }: {
-  icon: any; label: string; value: string | number; sub?: string; color?: string;
+const semanticIconBg: Record<SchoolSemantic, string> = {
+  growth: SCHOOL_THEME.growth.bg,
+  knowledge: SCHOOL_THEME.knowledge.bg,
+  milestone: SCHOOL_THEME.milestone.bg,
+  compassion: SCHOOL_THEME.compassion.bg,
+  scholar: SCHOOL_THEME.scholar.bg,
+};
+
+const semanticIconColor: Record<SchoolSemantic, string> = {
+  growth: SCHOOL_THEME.growth.icon,
+  knowledge: SCHOOL_THEME.knowledge.icon,
+  milestone: SCHOOL_THEME.milestone.icon,
+  compassion: SCHOOL_THEME.compassion.icon,
+  scholar: SCHOOL_THEME.scholar.muted,
+};
+
+function StatCard({ icon: Icon, label, value, sub, semantic = 'growth' }: {
+  icon: LucideIcon;
+  label: string;
+  value: string | number;
+  sub?: string;
+  semantic?: SchoolSemantic;
 }) {
   return (
-    <Card>
+    <Card className={SCHOOL_THEME.surface}>
       <CardContent className="flex items-center gap-4 pt-6">
-        <div className={`p-3 rounded-full bg-gray-100 ${color}`}>
-          <Icon size={20} />
+        <div className={`p-3 rounded-full ${semanticIconBg[semantic]}`}>
+          <Icon size={20} className={semanticIconColor[semantic]} />
         </div>
         <div>
-          <p className="text-sm text-gray-500">{label}</p>
-          <p className="text-2xl font-bold">{value}</p>
-          {sub && <p className="text-xs text-gray-400">{sub}</p>}
+          <p className={`text-sm ${SCHOOL_THEME.scholar.muted}`}>{label}</p>
+          <p className={`text-2xl font-bold ${SCHOOL_THEME.scholar.text}`}>{value}</p>
+          {sub && <p className={`text-xs ${SCHOOL_THEME.scholar.muted}`}>{sub}</p>}
         </div>
       </CardContent>
     </Card>
@@ -129,7 +152,7 @@ function StudentAnalytics() {
               key={d}
               onClick={() => setDays(d)}
               className={`px-3 py-1 rounded-full text-sm border transition-colors
-                ${days === d ? 'bg-green-500 text-white border-green-500' : 'border-gray-300 text-gray-600 hover:border-green-400'}`}
+                ${days === d ? `${SCHOOL_THEME.growth.bgSolid} text-white border-primary-600` : `border-gray-300 ${SCHOOL_THEME.scholar.muted} hover:border-primary-400`}`}
             >
               {d}d
             </button>
@@ -139,24 +162,24 @@ function StudentAnalytics() {
 
       {/* Summary stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard icon={Zap} label="XP Earned" value={data.summary.xpEarned.toLocaleString()} sub={`${days} days`} color="text-yellow-500" />
-        <StatCard icon={BookOpen} label="Lessons Done" value={data.summary.lessonsCompleted} color="text-blue-500" />
-        <StatCard icon={Clock} label="Time Spent" value={`${data.summary.timeSpentMinutes}m`} color="text-purple-500" />
-        <StatCard icon={Flame} label="Days Active" value={data.summary.daysActive} sub={`streak: ${data.user.streak}`} color="text-orange-500" />
+        <StatCard icon={Zap} label="XP Earned" value={data.summary.xpEarned.toLocaleString()} sub={`${days} days`} semantic="growth" />
+        <StatCard icon={BookOpen} label="Lessons Done" value={data.summary.lessonsCompleted} semantic="knowledge" />
+        <StatCard icon={Clock} label="Time Spent" value={`${data.summary.timeSpentMinutes}m`} semantic="scholar" />
+        <StatCard icon={Flame} label="Days Active" value={data.summary.daysActive} sub={`streak: ${data.user.streak}`} semantic="milestone" />
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard icon={Star} label="Total XP" value={data.user.totalXp.toLocaleString()} />
-        <StatCard icon={Target} label="Modules Done" value={data.user.totalModulesCompleted} />
-        <StatCard icon={Trophy} label="Achievements" value={data.user.totalAchievements} color="text-yellow-500" />
-        <StatCard icon={TrendingUp} label="Best Streak" value={`${data.user.longestStreak}d`} color="text-red-500" />
+        <StatCard icon={Star} label="Total XP" value={data.user.totalXp.toLocaleString()} semantic="growth" />
+        <StatCard icon={Target} label="Modules Done" value={data.user.totalModulesCompleted} semantic="knowledge" />
+        <StatCard icon={Trophy} label="Achievements" value={data.user.totalAchievements} semantic="milestone" />
+        <StatCard icon={TrendingUp} label="Best Streak" value={`${data.user.longestStreak}d`} semantic="compassion" />
       </div>
 
       {/* XP over time */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Zap size={18} className="text-yellow-500" /> XP Over Time
+            <Zap size={18} className={SCHOOL_THEME.growth.icon} /> XP Over Time
           </CardTitle>
         </CardHeader>
         <CardContent>
