@@ -51,6 +51,9 @@ function ConfidenceRing({ value, size = 64 }: { value: number; size?: number }) 
   );
 }
 
+const alphabetSignImageUrl = (letter: string) => `/signs/alphabet/${letter}.jpg`;
+const answerLabel = (letter: string) => `Letter ${letter}`;
+
 export default function PracticePage() {
   const [mode, setMode] = useState<PracticeMode>('identify');
   const [currentChallenge, setCurrentChallenge] = useState<GestureChallenge | null>(null);
@@ -143,7 +146,11 @@ export default function PracticePage() {
       .slice(0, 3);
     const allOptions = [...wrongOptions, randomGesture].sort(() => Math.random() - 0.5);
 
-    setCurrentChallenge({ id: Date.now().toString(), name: randomGesture });
+    setCurrentChallenge({
+      id: Date.now().toString(),
+      name: randomGesture,
+      imageUrl: alphabetSignImageUrl(randomGesture),
+    });
     setOptions(allOptions);
     setSelected(null);
     setShowResult(false);
@@ -473,18 +480,18 @@ export default function PracticePage() {
               {/* Sign Display - Left Panel */}
               <div className="lg:col-span-2">
                 <div className="bg-[#161822] rounded-2xl border border-gray-800 p-6 text-center">
-                  <p className="text-xs text-gray-500 uppercase tracking-wider mb-4">Current Sign</p>
-                  <div className="w-44 h-44 bg-gradient-to-br from-indigo-500/10 to-purple-500/10 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-indigo-500/20">
+                  <p className="text-xs text-gray-500 uppercase tracking-wider mb-4">Sign Card</p>
+                  <div className="w-56 h-56 bg-white rounded-2xl flex items-center justify-center mx-auto mb-4 border border-indigo-500/20 overflow-hidden">
                     {currentChallenge?.imageUrl ? (
-                      <img src={currentChallenge.imageUrl} alt={currentChallenge.name} className="w-full h-full object-contain rounded-2xl" />
+                      <img src={currentChallenge.imageUrl} alt="Alphabet hand sign" className="w-full h-full object-contain" />
                     ) : (
                       <span className="text-8xl font-bold bg-gradient-to-br from-indigo-400 to-purple-400 bg-clip-text text-transparent">
-                        {currentChallenge?.name?.charAt(0)}
+                        ?
                       </span>
                     )}
                   </div>
                   <div className="inline-flex items-center gap-2 bg-indigo-500/10 px-4 py-2 rounded-full border border-indigo-500/20">
-                    <span className="text-indigo-400 font-semibold text-lg">{currentChallenge?.name}</span>
+                    <span className="text-indigo-300 font-semibold text-sm">Static alphabet sign</span>
                   </div>
                 </div>
               </div>
@@ -492,8 +499,8 @@ export default function PracticePage() {
               {/* Answer Options - Right Panel */}
               <div className="lg:col-span-3">
                 <div className="bg-[#161822] rounded-2xl border border-gray-800 p-6">
-                  <h3 className="text-xl font-bold mb-1">What does this sign mean?</h3>
-                  <p className="text-sm text-gray-500 mb-6">Select the correct answer below</p>
+                  <h3 className="text-xl font-bold mb-1">What letter is this sign?</h3>
+                  <p className="text-sm text-gray-500 mb-6">Study the handshape and choose the matching alphabet letter.</p>
 
                   <div className="grid grid-cols-2 gap-3">
                     {options.map((opt, idx) => (
@@ -513,7 +520,7 @@ export default function PracticePage() {
                           }`}
                       >
                         <span className="text-xs text-gray-600 block mb-1">{String.fromCharCode(65 + idx)}</span>
-                        <span className="text-base">{opt}</span>
+                        <span className="text-base">{answerLabel(opt)}</span>
                         {showResult && opt === currentChallenge?.name && (
                           <svg className="absolute top-3 right-3 w-5 h-5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
@@ -535,7 +542,7 @@ export default function PracticePage() {
                           <p className={`font-bold ${isCorrect ? 'text-green-400' : 'text-red-400'}`}>
                             {isCorrect ? `Correct! +${basePoints + Math.max(0, streak - 1) * streakBonusPerStep} points` : 'Not quite right'}
                           </p>
-                          {!isCorrect && <p className="text-sm text-gray-500">Answer: <strong className="text-gray-300">{currentChallenge?.name}</strong></p>}
+                          {!isCorrect && <p className="text-sm text-gray-500">Answer: <strong className="text-gray-300">{currentChallenge ? answerLabel(currentChallenge.name) : ''}</strong></p>}
                         </div>
                       </div>
                     </div>

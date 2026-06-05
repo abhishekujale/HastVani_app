@@ -2,12 +2,12 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
-import { assignmentApi, classApi, lessonApi } from '@/lib/api';
+import { assignmentApi, classApi, lessonApi, moduleApi } from '@/lib/api';
 import { ROUTES, ROLES } from '@/lib/config';
 import ProtectedRoute from '@/components/auth/ProtectedRoute';
 import RoleGuard from '@/components/auth/RoleGuard';
 import CustomHeader from '@/components/CustomHeader';
-import type { Class, Lesson } from '@/types';
+import type { Class, Module, Lesson } from '@/types';
 
 export default function CreateAssignmentPage() {
   const router = useRouter();
@@ -34,35 +34,45 @@ export default function CreateAssignmentPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch class and lessons from its modules
+  // Fetch class and lessons from its modules. If the class has not been linked
+  // to modules yet, fall back to all modules the teacher can access.
   useEffect(() => {
     const fetchData = async () => {
       try {
         setLoadingModules(true);
+        setError(null);
         const classRes = await classApi.getById(classId);
         const cls = classRes.data.data as Class;
         setClassData(cls);
 
         const rawModules = cls.modules || [];
-        const moduleIds = rawModules.map((m: string | { _id: string }) =>
-          typeof m === 'string' ? m : m._id
-        );
-        if (moduleIds.length === 0) {
-          setLessonsByModule([]);
-          return;
+        let modules = rawModules
+          .map((m: string | Module) =>
+            typeof m === 'string'
+              ? { _id: m, moduleName: 'Module' }
+              : { _id: m._id, moduleName: m.moduleName || 'Module' }
+          )
+          .filter((m) => Boolean(m._id));
+
+        if (modules.length === 0) {
+          const modulesRes = await moduleApi.getAll();
+          modules = ((modulesRes.data.data || []) as Module[]).map((m) => ({
+            _id: m._id,
+            moduleName: m.moduleName || 'Module',
+          }));
         }
 
         const results: Array<{ module: { _id: string; moduleName: string }; lessons: Lesson[] }> = [];
-        for (const moduleId of moduleIds) {
+        for (const module of modules) {
           try {
-            const lessonsRes = await lessonApi.getByModule(moduleId);
+            const lessonsRes = await lessonApi.getByModule(module._id);
             const lessons = (lessonsRes.data.data || []) as Lesson[];
             if (lessons.length > 0) {
               const first = lessons[0];
               const mod =
                 first && typeof first.moduleId === 'object' && first.moduleId
                   ? { _id: (first.moduleId as { _id: string })._id, moduleName: (first.moduleId as { moduleName?: string }).moduleName || 'Module' }
-                  : { _id: moduleId, moduleName: 'Module' };
+                  : module;
               results.push({ module: mod, lessons });
             }
           } catch {
@@ -72,7 +82,7 @@ export default function CreateAssignmentPage() {
         setLessonsByModule(results);
       } catch (err) {
         console.error('Failed to fetch class/modules:', err);
-        setError('Failed to load class modules. Add modules to this class first.');
+        setError('Failed to load modules. Make sure the backend is running and modules have lessons.');
       } finally {
         setLoadingModules(false);
       }
@@ -261,7 +271,7 @@ export default function CreateAssignmentPage() {
                     </label>
                     {lessonsByModule.length === 0 ? (
                       <div className="bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-200 px-4 py-3 rounded-xl text-sm">
-                        No modules in this class yet. Add modules to the class first, then create assignments.
+                        No lessons found in available modules. Add lessons to a module first, then create assignments.
                       </div>
                     ) : (
                       <div className="space-y-4 max-h-64 overflow-y-auto border border-gray-200 dark:border-gray-600 rounded-xl p-4">
